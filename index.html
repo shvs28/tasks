@@ -699,9 +699,13 @@
         <button class="menu-item" data-action="export">
           <span>Export data</span>
         </button>
+        <button class="menu-item" data-action="import">
+          <span>Import data…</span>
+        </button>
         <button class="menu-item" data-action="clear-all">
           <span>Reset everything</span>
         </button>
+        <input type="file" id="importFileInput" accept="application/json,.json" style="display:none">
       </div>
     </div>
   </header>
@@ -812,6 +816,7 @@
     if (actionBtn) {
       const action = actionBtn.dataset.action;
       if (action === 'export') exportData();
+      if (action === 'import') importData();
       if (action === 'clear-all') clearAll();
       if (action === 'install') installApp();
       toggleSettings(false);
@@ -1207,6 +1212,73 @@
     a.remove();
     URL.revokeObjectURL(url);
   }
+
+  const importFileInput = document.getElementById('importFileInput');
+
+  function importData() {
+    importFileInput.value = '';
+    importFileInput.click();
+  }
+
+  importFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || !Array.isArray(parsed.lists)) {
+        throw new Error('Invalid format: missing lists array');
+      }
+      // Validate structure
+      for (const l of parsed.lists) {
+        if (typeof l.name !== 'string' || !Array.isArray(l.tasks)) {
+          throw new Error('Invalid list entry');
+        }
+      }
+
+      const existingTasks = state.lists.reduce((s, l) => s + l.tasks.length, 0);
+      const importTasks = parsed.lists.reduce((s, l) => s + l.tasks.length, 0);
+
+      const choice = prompt(
+        `Import ${parsed.lists.length} list(s) with ${importTasks} task(s).\n\n` +
+        `Type "merge" to add them to your current lists,\n` +
+        `or "replace" to overwrite everything (current: ${existingTasks} task(s)).\n\n` +
+        `Leave blank to cancel.`,
+        'merge'
+      );
+      if (!choice) return;
+
+      if (choice.toLowerCase() === 'replace') {
+        // Assign fresh IDs to avoid collisions
+        parsed.lists.forEach(l => {
+          l.id = uid();
+          l.tasks.forEach(t => { t.id = uid(); });
+        });
+        state = { lists: parsed.lists, filter: state.filter };
+      } else if (choice.toLowerCase() === 'merge') {
+        for (const incoming of parsed.lists) {
+          // Find existing list by name (case-insensitive), else create new
+          let target = state.lists.find(l => l.name.toLowerCase() === incoming.name.toLowerCase());
+          if (!target) {
+            target = { id: uid(), name: incoming.name, tasks: [] };
+            state.lists.push(target);
+          }
+          for (const t of incoming.tasks) {
+            target.tasks.push({ ...t, id: uid() });
+          }
+        }
+      } else {
+        alert('Cancelled — type exactly "merge" or "replace".');
+        return;
+      }
+
+      save();
+      render();
+      showToast(`Imported ${importTasks} task(s)`, false);
+    } catch (err) {
+      alert('Import failed: ' + err.message);
+    }
+  });
 
   function clearAll() {
     if (!confirm('Reset all lists and tasks? This cannot be undone.')) return;
